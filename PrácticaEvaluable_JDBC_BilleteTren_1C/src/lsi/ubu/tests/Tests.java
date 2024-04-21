@@ -34,7 +34,69 @@ public class Tests {
 		PreparedStatement st = null;
 		ResultSet rs = null;
 
-		// A completar por el alumno
+		// Prueba caso no existe el ticket
+		try {
+			java.util.Date fecha = toDate("15/04/2010");
+			Time hora = Time.valueOf("12:00:00");
+			int nroPlazas = 3;
+			int ticket = 1;
+
+			servicio.anularBillete(hora, fecha, ORIGEN, DESTINO, nroPlazas, ticket);
+			LOGGER.info("NO se da cuenta de que no existe el ticket MAL");
+		} catch (SQLException e) {
+			if (e.getErrorCode() == CompraBilleteTrenException.NO_EXISTE_TICKET) {
+				LOGGER.info("Se da cuenta de que no existe el ticket OK");
+			}
+		}
+
+		// Prueba caso si existe pero no se puede anular
+		try {
+			java.util.Date fecha = toDate("20/04/2022");
+			Time hora = Time.valueOf("8:30:00");
+			int nroPlazas = 50;
+			int ticket = 1;
+
+			servicio.anularBillete(hora, fecha, ORIGEN, DESTINO, nroPlazas, ticket);
+			LOGGER.info("NO se da cuenta de que no se puede anular MAL");
+		} catch (SQLException e) {
+			if (e.getErrorCode() == CompraBilleteTrenException.NO_ANULADO) {
+				LOGGER.info("Se da cuenta de que no se puede anular OK");
+			}
+		}
+
+		// Prueba caso si existe y si se puede anular
+		try {
+			java.util.Date fecha = toDate("20/04/2022");
+			Time hora = Time.valueOf("8:30:00");
+			int nroPlazas = 5;
+			int ticket = 3;
+
+			servicio.anularBillete(hora, fecha, ORIGEN, DESTINO, nroPlazas, ticket);
+
+			con = pool.getConnection();
+			st = con.prepareStatement(
+					" SELECT IDVIAJE||IDTREN||IDRECORRIDO||FECHA||NPLAZASLIBRES||REALIZADO||IDCONDUCTOR||IDTICKET||CANTIDAD||PRECIO "
+							+ " FROM VIAJES natural join tickets "
+							+ " where idticket=3 and trunc(fechacompra) = trunc(current_date) ");
+			rs = st.executeQuery();
+
+			String resultadoReal = "";
+			while (rs.next()) {
+				resultadoReal += rs.getString(1);
+			}
+
+			String resultadoEsperado = "11120/04/2225113550";
+			// LOGGER.info("R"+resultadoReal);
+			// LOGGER.info("E"+resultadoEsperado);
+			if (resultadoReal.equals(resultadoEsperado)) {
+				LOGGER.info("Anulacion ticket OK");
+			} else {
+				LOGGER.info("Anulacion ticket MAL");
+			}
+
+		} catch (SQLException e) {
+			LOGGER.info("Error inesperado MAL");
+		}
 	}
 
 	public void ejecutarTestsCompraBilletes() {
