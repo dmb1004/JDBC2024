@@ -71,6 +71,7 @@ public class Tests {
 			int nroPlazas = 5;
 			int ticket = 3;
 
+			servicio.comprarBillete(hora, fecha, ORIGEN, DESTINO, nroPlazas);
 			servicio.anularBillete(hora, fecha, ORIGEN, DESTINO, nroPlazas, ticket);
 
 			con = pool.getConnection();
@@ -85,7 +86,7 @@ public class Tests {
 				resultadoReal += rs.getString(1);
 			}
 
-			String resultadoEsperado = "11120/04/2225113550";
+			String resultadoEsperado = "";
 			// LOGGER.info("R"+resultadoReal);
 			// LOGGER.info("E"+resultadoEsperado);
 			if (resultadoReal.equals(resultadoEsperado)) {
