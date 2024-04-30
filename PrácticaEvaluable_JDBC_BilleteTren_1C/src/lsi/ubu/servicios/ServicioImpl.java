@@ -38,11 +38,17 @@ public class ServicioImpl implements Servicio {
 
 		try {
 			conn = pool.getConnection();
-			String query = "SELECT v.idViaje, t.cantidad "
-					+ "FROM viajes v "
-					+ "JOIN recorridos r ON r.idRecorrido = v.idRecorrido "
-					+ "JOIN tickets t ON t.idViaje = v.idViaje "
-					+ "WHERE idTicket = ? AND v.fecha = ? AND r.horasalida - TRUNC(r.horaSalida) = ? - TRUNC(?)";
+
+			// Realizamos la consulta con un bloqueo pesimista para evitar problemas de
+			// concurrencia
+			// En este caso hemos aplicado un FOR UPDATE para asegurar un bloque directo
+			// aunque se sacrifique portabilidad
+			String query = "SELECT v.idViaje, t.cantidad"
+					+ " FROM viajes v "
+					+ " JOIN recorridos r ON r.idRecorrido = v.idRecorrido"
+					+ " JOIN tickets t ON t.idViaje = v.idViaje "
+					+ " WHERE idTicket = ? AND v.fecha = ? AND r.horasalida - TRUNC(r.horaSalida) = ? - TRUNC(?)"
+					+ " FOR UPDATE";
 			stDatos = conn.prepareStatement(query);
 			stDatos.setInt(1, ticket);
 			stDatos.setDate(2, fechaSqlDate);
@@ -51,24 +57,29 @@ public class ServicioImpl implements Servicio {
 
 			rs = stDatos.executeQuery();
 
+			// Comprobamos si el billete existe
 			if (rs.next()) {
+				// Comprobamos si el billete tiene plazas suficientes para anular
 				if (nroPlazas <= rs.getInt("cantidad")) {
-					idViaje = rs.getInt("idViaje");
-					String update = "UPDATE viajes SET nPlazasLibres = nPlazasLibres + ? WHERE idViaje = ?";
 
+					idViaje = rs.getInt("idViaje");
+
+					// Actualizamos el número de plazas libres
+					String update = "UPDATE viajes SET nPlazasLibres = nPlazasLibres + ? WHERE idViaje = ?";
 					stUpdate = conn.prepareStatement(update);
 					stUpdate.setInt(1, nroPlazas);
 					stUpdate.setInt(2, idViaje);
-
 					stUpdate.executeUpdate();
 
+					// Eliminamos el billete
 					String delete = "DELETE FROM tickets WHERE idTicket = ?";
-
 					stDelete = conn.prepareStatement(delete);
 					stDelete.setInt(1, ticket);
-
 					nRowsDeleted = stDelete.executeUpdate();
 
+					// Esta excepción no debería de lanzarse nunca ya que se ha comprobado que los
+					// requisitos se cumplan.
+					// Pero hemos decidido añadirlo por si acaso
 					if (nRowsDeleted == 0) {
 						throw new CompraBilleteTrenException(CompraBilleteTrenException.NO_ANULADO);
 					}
@@ -91,24 +102,23 @@ public class ServicioImpl implements Servicio {
 			}
 
 		} finally {
-			if (conn != null) {
-				conn.setAutoCommit(true);
-				conn.close();
-			} else if (rs == null) {
-				conn.setAutoCommit(true);
-				rs.close();
-			} else if (stDatos == null) {
-				conn.setAutoCommit(true);
-				stDatos.close();
-			} else if (stUpdate == null) {
-				conn.setAutoCommit(true);
-				stUpdate.close();
-			} else if (stDelete == null) {
-				conn.setAutoCommit(true);
-				stDelete.close();
-			}
-		}
+			conn.setAutoCommit(true);
 
+			if (conn != null)
+				conn.close();
+
+			if (rs != null)
+				rs.close();
+
+			if (stDatos != null)
+				stDatos.close();
+
+			if (stUpdate != null)
+				stUpdate.close();
+
+			if (stDelete != null)
+				stDelete.close();
+		}
 	}
 
 	@Override
@@ -132,12 +142,20 @@ public class ServicioImpl implements Servicio {
 			conn = pool.getConnection();
 			conn.setAutoCommit(false);
 
+			// Al igual que en el caso anterior hemos aplicado un bloqueo pesimista para
+			// evitar problemas de concurrencia.
+			// Hemos aplicadoaplicado un FOR UPDATE para asegurar un bloque directo aunque
+			// se sacrifique portabilidad
+			// Para el tratamiento de las horas, hemos utilizado trunc para eliminar la
+			// parte de la fecha de la columna horaSalida,
+			// dejando solo la parte del tiempo, y luego restando horaSalida completa para
+			// aislar específicamente la parte del tiempo.
+			String query = "SELECT v.idViaje, r.precio"
+					+ " FROM recorridos r "
+					+ " JOIN viajes v ON r.idRecorrido = v.idRecorrido"
+					+ " WHERE r.horasalida - TRUNC(r.horaSalida) = ? - TRUNC(?) AND v.fecha = ? AND r.estacionOrigen = ? AND r.estacionDestino = ?"
+					+ " FOR UPDATE";
 			int contador = 1;
-			String query = "SELECT v.idViaje, r.precio "
-					+ "FROM recorridos r "
-					+ "JOIN viajes v ON r.idRecorrido = v.idRecorrido "
-					+ "WHERE r.horasalida - TRUNC(r.horaSalida) = ? - TRUNC(?) AND v.fecha = ? AND r.estacionOrigen = ? AND r.estacionDestino = ?";
-
 			stDatos = conn.prepareStatement(query);
 			stDatos.setTimestamp(contador++, horaTimestamp);
 			stDatos.setTimestamp(contador++, horaTimestamp);
@@ -147,33 +165,37 @@ public class ServicioImpl implements Servicio {
 
 			rs = stDatos.executeQuery();
 
+			// Comprobamos si existe el viaje
 			if (rs.next()) {
+
 				idViaje = rs.getInt("idViaje");
-
 				contador = 1;
-				String restarPlazas = "UPDATE viajes SET nPlazasLibres = nPlazasLibres - ? WHERE idViaje = ? AND nPlazasLibres >= ?";
 
+				// Actualizamos el número de plazas libres
+				String restarPlazas = "UPDATE viajes SET nPlazasLibres = nPlazasLibres - ? WHERE idViaje = ? AND nPlazasLibres >= ?";
 				stUpdate = conn.prepareStatement(restarPlazas);
 				stUpdate.setInt(contador++, nroPlazas);
 				stUpdate.setInt(contador++, idViaje);
 				stUpdate.setInt(contador++, nroPlazas);
-
 				nRowsUpdated = stUpdate.executeUpdate();
 
+				// Comprobamos si hay plazas suficientes
 				if (nRowsUpdated > 0) {
 					contador = 1;
 					BigDecimal precio = rs.getBigDecimal("precio");
 					BigDecimal precioTotal = precio.multiply(new BigDecimal(nroPlazas));
+
+					// Insertamos el billete
 					String insertTicket = "INSERT INTO tickets (idTicket, idViaje, fechaCompra, cantidad, precio) VALUES (seq_tickets.NEXTVAL, ?, TRUNC(current_date), ?, ?)";
-
 					stInsert = conn.prepareStatement(insertTicket);
-
 					stInsert.setInt(contador++, idViaje);
 					stInsert.setInt(contador++, nroPlazas);
 					stInsert.setBigDecimal(contador, precioTotal);
-
 					nRowsCreated = stInsert.executeUpdate();
 
+					// Esta excepción no debería de lanzarse nunca ya que se ha comprobado que los
+					// requisitos se cumplan
+					// Pero hemos decidido añadirlo por si acaso
 					if (nRowsCreated == 0) {
 						throw new CompraBilleteTrenException(CompraBilleteTrenException.NO_COMPRADO);
 					}
@@ -196,22 +218,23 @@ public class ServicioImpl implements Servicio {
 			}
 
 		} finally {
-			if (conn != null) {
-				conn.setAutoCommit(true);
-				conn.close();
-			} else if (rs == null) {
-				conn.setAutoCommit(true);
+			conn.setAutoCommit(true);
+
+			if (rs != null)
 				rs.close();
-			} else if (stDatos == null) {
-				conn.setAutoCommit(true);
+
+			if (stDatos != null)
 				stDatos.close();
-			} else if (stUpdate == null) {
-				conn.setAutoCommit(true);
+
+			if (stUpdate != null)
 				stUpdate.close();
-			} else if (stInsert == null) {
-				conn.setAutoCommit(true);
+
+			if (stInsert != null)
 				stInsert.close();
-			}
+
+			if (conn != null)
+				conn.close();
+
 		}
 	}
 }
